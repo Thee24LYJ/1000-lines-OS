@@ -29,8 +29,8 @@ void putchar(char ch)
 
 void kernel_main(void)
 {
-	// // bss段初始化为零
-	// memset(__bss, 0, (size_t)__bss_end - (size_t)__bss);
+	// bss段初始化为零
+	memset(__bss, 0, (size_t)__bss_end - (size_t)__bss);
 
 	// 调用putchar()输出字符串
 	const char *s = "\n\nhello world from putchar()!!!\n\n";
@@ -43,6 +43,9 @@ void kernel_main(void)
 	printf("1 + 2 = %d, %x\n", 1 + 2, 0x123abc);
 	int a = 2, b = 7;
 	printf("%d + %d = %d\n", a, b, a + b);
+
+	PANIC("booted!");
+	printf("unreachable here!\n");
 
 	for (;;)
 	{
