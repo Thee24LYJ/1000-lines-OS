@@ -232,15 +232,36 @@ struct process *create_process(uint32_t pc)
 	return proc;
 }
 
-// 上下文切换测试
-void delay(void)
+struct process *cur_proc;  // 当前运行进程
+struct process *idle_proc; // 空闲进程
+
+void yield(void)
 {
-	for (int i = 0; i < 3000000; i++)
+	// 寻找可以运行的进程
+	struct process *next = idle_proc;
+	for (int i = 0; i < PROCS_MAX; i++)
 	{
-		__asm__ __volatile__("nop");
+		struct process *proc = &procs[(cur_proc->pid + i) % PROCS_MAX];
+		if (proc->state == PROC_RUNNABLE && proc->pid > 0)
+		{
+			next = proc;
+			break;
+		}
 	}
+
+	// 除当前进程外没有其他可运行进程则返回继续运行当前进程
+	if (next == cur_proc)
+	{
+		return;
+	}
+
+	// 上下文切换
+	struct process *prev = cur_proc;
+	cur_proc = next;
+	switch_context(&prev->sp, &next->sp);
 }
 
+// 上下文切换测试
 struct process *proc_a;
 struct process *proc_b;
 
@@ -250,8 +271,7 @@ void proc_a_entry(void)
 	while (1)
 	{
 		printf("process a running.\n");
-		switch_context(&proc_a->sp, &proc_b->sp);
-		delay();
+		yield();
 	}
 }
 
@@ -261,8 +281,7 @@ void proc_b_entry(void)
 	while (1)
 	{
 		printf("process b running.\n");
-		switch_context(&proc_b->sp, &proc_a->sp);
-		delay();
+		yield();
 	}
 }
 
@@ -286,10 +305,15 @@ void kernel_main(void)
 	// PANIC("booted!");
 	// printf("unreachable here!\n");
 
-	// // 在stvec寄存器中注册异常处理程序
-	// WRITE_CSR(stvec, (uint32_t)kernel_entry);
+	// 在stvec寄存器中注册异常处理程序
+	WRITE_CSR(stvec, (uint32_t)kernel_entry);
 	// // 触发非法指令异常的伪指令
 	// __asm__ __volatile__("unimp");
+
+	// 初始化空闲进程 ID=-1
+	idle_proc = create_process((uint32_t)NULL);
+	idle_proc->pid = -1;
+	cur_proc = idle_proc;
 
 	// 内存分配测试
 	paddr_t paddr0 = alloc_pages(3);
@@ -298,11 +322,12 @@ void kernel_main(void)
 	printf("call alloc_pages: paddr1=%x\n", paddr1);
 	// PANIC("kernel booted!!!\n");
 
-	// 进程手动切换测试
+	// 调度器进程切换测试
 	proc_a = create_process((uint32_t)proc_a_entry);
 	proc_b = create_process((uint32_t)proc_b_entry);
-	proc_a_entry();
-	printf("unreachable here!\n");
+	
+	yield();
+	PANIC("switched to idle process");
 
 	for (;;)
 	{
