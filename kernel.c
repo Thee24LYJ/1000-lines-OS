@@ -34,7 +34,8 @@ __attribute__((aligned(4))) void
 kernel_entry(void)
 {
 	__asm__ __volatile__(
-		"csrw sscratch, sp\n"
+		// 从sscratch中获取运行进程的内核栈
+		"csrrw sp, sscratch, sp\n" // 交换sp和sscratch
 		"addi sp, sp, -4 * 31\n"
 		"sw ra, 4 * 0(sp)\n"
 		"sw gp, 4 * 1(sp)\n"
@@ -67,8 +68,13 @@ kernel_entry(void)
 		"sw s10, 4 * 28(sp)\n"
 		"sw s11, 4 * 29(sp)\n"
 
+		// 获取并保存异常发生时的sp指针
 		"csrr a0, sscratch\n"
 		"sw a0, 4 * 30(sp)\n"
+
+		// 重置内核栈
+		"addi a0, sp, 4 * 31\n"
+		"csrw sscratch, a0\n"
 
 		"mv a0, sp\n"
 		"call handle_trap\n"
@@ -210,7 +216,6 @@ struct process *create_process(uint32_t pc)
 
 	// 设置被调用者保存寄存器，这些寄存器将在switch_context第一次上下文切换时恢复
 	uint32_t *sp = (uint32_t *)&proc->stack[sizeof(proc->stack)];
-	printf("sizeof(proc->stack)=%d\n", sizeof(proc->stack));
 	*--sp = 0;			  // s11
 	*--sp = 0;			  // s10
 	*--sp = 0;			  // s9
@@ -254,6 +259,12 @@ void yield(void)
 	{
 		return;
 	}
+
+	// 在sscratch寄存器中设置当前执行进程的内核栈的初始值
+	__asm__ __volatile__(
+		"csrw sscratch, %[sscratch]\n"
+		:
+		: [sscratch] "r"((uint32_t)&next->stack[sizeof(next->stack)]));
 
 	// 上下文切换
 	struct process *prev = cur_proc;
@@ -309,6 +320,10 @@ void kernel_main(void)
 	WRITE_CSR(stvec, (uint32_t)kernel_entry);
 	// // 触发非法指令异常的伪指令
 	// __asm__ __volatile__("unimp");
+	// __asm__ __volatile__(
+	// 	"li sp, 0xdeadbeef\n" // 将无效地址设置给sp
+	// 	"unimp"				  // 触发异常
+	// );
 
 	// 初始化空闲进程 ID=-1
 	idle_proc = create_process((uint32_t)NULL);
@@ -325,7 +340,7 @@ void kernel_main(void)
 	// 调度器进程切换测试
 	proc_a = create_process((uint32_t)proc_a_entry);
 	proc_b = create_process((uint32_t)proc_b_entry);
-	
+
 	yield();
 	PANIC("switched to idle process");
 
