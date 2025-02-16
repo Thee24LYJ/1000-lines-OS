@@ -133,6 +133,139 @@ paddr_t alloc_pages(uint32_t n)
 	return paddr;
 }
 
+#define PROCS_MAX 8		// 最大进程数
+#define PROC_UNUSED 0	// 未运行的进程
+#define PROC_RUNNABLE 1 // 可运行的进程
+
+struct process
+{
+	int pid;			 // 进程ID
+	int state;			 // 进程状态 PROC_UNUSED或PROC_UNUSED
+	vaddr_t sp;			 // 栈指针
+	uint8_t stack[8192]; // 内核栈 8KB
+};
+
+__attribute__((naked)) void switch_context(uint32_t *prev_sp, uint32_t *next_sp)
+{
+	__asm__ __volatile__(
+		// 将被调用者寄存器保存到当前进程栈上
+		// 为13个4字节寄存器分配栈空间再将对应寄存器保存到该栈空间上
+		"addi sp, sp, -4 * 13\n"
+		"sw ra, 4 * 0(sp)\n"
+		"sw s0, 4 * 1(sp)\n"
+		"sw s1, 4 * 2(sp)\n"
+		"sw s2, 4 * 3(sp)\n"
+		"sw s3, 4 * 4(sp)\n"
+		"sw s4, 4 * 5(sp)\n"
+		"sw s5, 4 * 6(sp)\n"
+		"sw s6, 4 * 7(sp)\n"
+		"sw s7, 4 * 8(sp)\n"
+		"sw s8, 4 * 9(sp)\n"
+		"sw s9, 4 * 10(sp)\n"
+		"sw s10, 4 * 11(sp)\n"
+		"sw s11, 4 * 12(sp)\n"
+
+		// 切换栈指针
+		"sw sp, (a0)\n" // *prev_sp = sp; 保存上一个sp指针
+		"lw sp, (a1)\n" // 切换sp操作 切换为当前sp指针
+
+		// 从下一个进程栈中恢复被调用者的寄存器
+		"lw ra, 4 * 0(sp)\n"
+		"lw s0, 4 * 1(sp)\n"
+		"lw s1, 4 * 2(sp)\n"
+		"lw s2, 4 * 3(sp)\n"
+		"lw s3, 4 * 4(sp)\n"
+		"lw s4, 4 * 5(sp)\n"
+		"lw s5, 4 * 6(sp)\n"
+		"lw s6, 4 * 7(sp)\n"
+		"lw s7, 4 * 8(sp)\n"
+		"lw s8, 4 * 9(sp)\n"
+		"lw s9, 4 * 10(sp)\n"
+		"lw s10, 4 * 11(sp)\n"
+		"lw s11, 4 * 12(sp)\n"
+		"addi sp, sp, 4 * 13\n" // 从栈中弹出13个4字节大小寄存器
+		"ret\n");
+}
+
+// 所有进程
+struct process procs[PROCS_MAX];
+
+struct process *create_process(uint32_t pc)
+{
+	// 查找未使用的进程
+	struct process *proc = NULL;
+	int i;
+	for (i = 0; i < PROCS_MAX; i++)
+	{
+		if (procs[i].state == PROC_UNUSED)
+		{
+			proc = &procs[i];
+			break;
+		}
+	}
+	if (!proc)
+	{
+		PANIC("no free process slots!!!\n");
+	}
+
+	// 设置被调用者保存寄存器，这些寄存器将在switch_context第一次上下文切换时恢复
+	uint32_t *sp = (uint32_t *)&proc->stack[sizeof(proc->stack)];
+	printf("sizeof(proc->stack)=%d\n", sizeof(proc->stack));
+	*--sp = 0;			  // s11
+	*--sp = 0;			  // s10
+	*--sp = 0;			  // s9
+	*--sp = 0;			  // s8
+	*--sp = 0;			  // s7
+	*--sp = 0;			  // s6
+	*--sp = 0;			  // s5
+	*--sp = 0;			  // s4
+	*--sp = 0;			  // s3
+	*--sp = 0;			  // s2
+	*--sp = 0;			  // s1
+	*--sp = 0;			  // s0
+	*--sp = (uint32_t)pc; // ra
+
+	// 初始化进程相关字段
+	proc->pid = i + 1;
+	proc->state = PROC_RUNNABLE;
+	proc->sp = (uint32_t)sp;
+	return proc;
+}
+
+// 上下文切换测试
+void delay(void)
+{
+	for (int i = 0; i < 3000000; i++)
+	{
+		__asm__ __volatile__("nop");
+	}
+}
+
+struct process *proc_a;
+struct process *proc_b;
+
+void proc_a_entry(void)
+{
+	printf("starting process A\n");
+	while (1)
+	{
+		printf("process a running.\n");
+		switch_context(&proc_a->sp, &proc_b->sp);
+		delay();
+	}
+}
+
+void proc_b_entry(void)
+{
+	printf("starting process B\n");
+	while (1)
+	{
+		printf("process b running.\n");
+		switch_context(&proc_b->sp, &proc_a->sp);
+		delay();
+	}
+}
+
 void kernel_main(void)
 {
 	// bss段初始化为零
@@ -158,11 +291,18 @@ void kernel_main(void)
 	// // 触发非法指令异常的伪指令
 	// __asm__ __volatile__("unimp");
 
+	// 内存分配测试
 	paddr_t paddr0 = alloc_pages(3);
 	paddr_t paddr1 = alloc_pages(1);
 	printf("call alloc_pages: paddr0=%x\n", paddr0);
 	printf("call alloc_pages: paddr1=%x\n", paddr1);
-	PANIC("kernel booted!!!\n");
+	// PANIC("kernel booted!!!\n");
+
+	// 进程手动切换测试
+	proc_a = create_process((uint32_t)proc_a_entry);
+	proc_b = create_process((uint32_t)proc_b_entry);
+	proc_a_entry();
+	printf("unreachable here!\n");
 
 	for (;;)
 	{
