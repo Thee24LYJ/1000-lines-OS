@@ -3,6 +3,7 @@
 
 // 获取对应符号起始地址
 extern char __bss[], __bss_end[], __stack_top[];
+extern char __free_ram[], __free_ram_end[];
 
 struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long fid, long eid)
 {
@@ -116,6 +117,22 @@ void handle_trap(struct trap_frame *f)
 	PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
 }
 
+// 动态分配n页内存并返回对应的起始地址 待完善
+// 凹凸分配器或线性分配器 (未释放分配的内存)
+paddr_t alloc_pages(uint32_t n)
+{
+	static paddr_t next_paddr = (paddr_t)__free_ram;
+	paddr_t paddr = next_paddr;
+	next_paddr += n * PAGE_SIZE;
+
+	if (next_paddr > (paddr_t)__free_ram_end)
+	{
+		PANIC("out of memory!!!\n");
+	}
+	memset((void *)paddr, 0, n * PAGE_SIZE);
+	return paddr;
+}
+
 void kernel_main(void)
 {
 	// bss段初始化为零
@@ -136,10 +153,16 @@ void kernel_main(void)
 	// PANIC("booted!");
 	// printf("unreachable here!\n");
 
-	// 在stvec寄存器中注册异常处理程序
-	WRITE_CSR(stvec, (uint32_t)kernel_entry);
-	// 触发非法指令异常的伪指令
-	__asm__ __volatile__("unimp");
+	// // 在stvec寄存器中注册异常处理程序
+	// WRITE_CSR(stvec, (uint32_t)kernel_entry);
+	// // 触发非法指令异常的伪指令
+	// __asm__ __volatile__("unimp");
+
+	paddr_t paddr0 = alloc_pages(3);
+	paddr_t paddr1 = alloc_pages(1);
+	printf("call alloc_pages: paddr0=%x\n", paddr0);
+	printf("call alloc_pages: paddr1=%x\n", paddr1);
+	PANIC("kernel booted!!!\n");
 
 	for (;;)
 	{
