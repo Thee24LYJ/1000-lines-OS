@@ -4,6 +4,7 @@
 // 获取对应符号起始地址
 extern char __bss[], __bss_end[], __stack_top[];
 extern char __free_ram[], __free_ram_end[];
+extern char __kernel_base[];
 
 struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long fid, long eid)
 {
@@ -143,14 +144,6 @@ paddr_t alloc_pages(uint32_t n)
 #define PROC_UNUSED 0	// 未运行的进程
 #define PROC_RUNNABLE 1 // 可运行的进程
 
-struct process
-{
-	int pid;			 // 进程ID
-	int state;			 // 进程状态 PROC_UNUSED或PROC_UNUSED
-	vaddr_t sp;			 // 栈指针
-	uint8_t stack[8192]; // 内核栈 8KB
-};
-
 __attribute__((naked)) void switch_context(uint32_t *prev_sp, uint32_t *next_sp)
 {
 	__asm__ __volatile__(
@@ -193,6 +186,32 @@ __attribute__((naked)) void switch_context(uint32_t *prev_sp, uint32_t *next_sp)
 		"ret\n");
 }
 
+// 准备二级页表并填充二级中的页表项
+void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags)
+{
+	if (!is_aligned(vaddr, PAGE_SIZE))
+	{
+		PANIC("unaligned vaddr %x", vaddr);
+	}
+	if (!is_aligned(paddr, PAGE_SIZE))
+	{
+		PANIC("unaligned paddr %x", paddr);
+	}
+
+	uint32_t vpn1 = (vaddr >> 22) & 0x3ff; // 10位vpn[1]
+	if ((table1[vpn1] & PAGE_V) == 0)
+	{
+		// 创建不存在的二级页表
+		uint32_t pt_addr = alloc_pages(1);
+		table1[vpn1] = ((pt_addr / PAGE_SIZE) << 10) | PAGE_V;
+	}
+
+	// 设置二级页表以映射物理页面
+	uint32_t vpn0 = (vaddr >> 12) & 0x3ff;
+	uint32_t *table0 = (uint32_t *)((table1[vpn1] >> 10) * PAGE_SIZE);
+	table0[vpn0] = ((paddr / PAGE_SIZE) << 10) | flags | PAGE_V;
+}
+
 // 所有进程
 struct process procs[PROCS_MAX];
 
@@ -230,10 +249,18 @@ struct process *create_process(uint32_t pc)
 	*--sp = 0;			  // s0
 	*--sp = (uint32_t)pc; // ra
 
+	// 映射内核页面
+	uint32_t *page_table = (uint32_t *)alloc_pages(1);
+	for (paddr_t paddr = (paddr_t)__kernel_base; paddr < (paddr_t)__free_ram_end; paddr += PAGE_SIZE)
+	{
+		map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
+	}
+
 	// 初始化进程相关字段
 	proc->pid = i + 1;
 	proc->state = PROC_RUNNABLE;
 	proc->sp = (uint32_t)sp;
+	proc->page_table = page_table;
 	return proc;
 }
 
@@ -261,10 +288,15 @@ void yield(void)
 	}
 
 	// 在sscratch寄存器中设置当前执行进程的内核栈的初始值
+	// 上下文切换时切换进程页表
 	__asm__ __volatile__(
+		"sfence.vma\n"
+		"csrw satp, %[stap]\n"
+		"sfence.vma\n"
 		"csrw sscratch, %[sscratch]\n"
 		:
-		: [sscratch] "r"((uint32_t)&next->stack[sizeof(next->stack)]));
+		: [stap] "r"(SATP_SV32 | ((uint32_t)next->page_table / PAGE_SIZE)),
+		  [sscratch] "r"((uint32_t)&next->stack[sizeof(next->stack)]));
 
 	// 上下文切换
 	struct process *prev = cur_proc;
@@ -281,7 +313,7 @@ void proc_a_entry(void)
 	printf("starting process A\n");
 	while (1)
 	{
-		printf("process a running.\n");
+		// printf("process a running.\n");
 		yield();
 	}
 }
@@ -291,7 +323,7 @@ void proc_b_entry(void)
 	printf("starting process B\n");
 	while (1)
 	{
-		printf("process b running.\n");
+		// printf("process b running.\n");
 		yield();
 	}
 }

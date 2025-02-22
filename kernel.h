@@ -46,6 +46,16 @@ struct trap_frame
 	uint32_t sp;
 } __attribute__((packed));
 
+// 进程结构体
+struct process
+{
+	int pid;			  // 进程ID
+	int state;			  // 进程状态 PROC_UNUSED或PROC_UNUSED
+	vaddr_t sp;			  // 栈指针
+	uint32_t *page_table; // 一级页表指针
+	uint8_t stack[8192];  // 内核栈 8KB
+};
+
 // 内核恐慌 Kernel Panic
 #define PANIC(fmt, ...)                                                      \
 	do                                                                       \
@@ -71,5 +81,12 @@ struct trap_frame
 		uint32_t __tmp = (value);                                 \
 		__asm__ __volatile__("csrw " #reg ", %0" : : "r"(__tmp)); \
 	} while (0);
+
+#define SATP_SV32 (1u << 31)
+#define PAGE_V (1<<0)	// 有效位(表项已启用)
+#define PAGE_R (1 << 1)	// 可读
+#define PAGE_W (1 << 2)	// 可写
+#define PAGE_X (1 << 3)	// 可执行
+#define PAGE_U (1 << 4)	// 用户模式可访问
 
 #endif

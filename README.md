@@ -312,3 +312,45 @@ PCB包含进程ID、进程状态、栈指针和内核栈等信息
 ### 调度器
 
 调度器实现：yield()，"yield"这个词经常被用作允许进程主动让出 CPU 给另一个进程的 API 名称。
+
+# 页表
+
+### 内存管理和虚拟寻址
+
+当程序访问内存时，CPU 会将指定的地址（虚拟地址）转换为物理地址。将虚拟地址映射到物理地址的表称为页表。通过切换页表，相同的虚拟地址可以指向不同的物理地址。这允许隔离内存空间（虚拟地址空间）并分离内核和应用程序内存区域，从而增强系统安全性
+
+本项目使用RISC-V 的一种分页机制，称为 Sv32，它使用两级页表。32位虚拟地址被分为一级页表索引（VPN[1]）、二级索引（VPN[0]）和页内偏移
+
+VPN\[1](10位),VPN\[0](10位),offset(12位),总共32位
+
+Sv32分页机制特点：
+改变中间位（VPN[0]）不会影响一级索引。这意味着相邻地址的页表项集中在同一个一级页表中。
+改变低位不会影响 VPN[1] 或 VPN[0]。这意味着在同一个 4KB 页面内的地址位于同一个页表项中
+
+**当访问内存时，CPU 计算 VPN[1] 和 VPN[0] 以识别相应的页表项，读取映射的基本物理地址，并加上 offset 得到最终的物理地址**
+
+```c
+// table1为一级页表(大小为1页,4096KB)
+void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags) {
+    if (!is_aligned(vaddr, PAGE_SIZE))
+        PANIC("unaligned vaddr %x", vaddr);
+
+    if (!is_aligned(paddr, PAGE_SIZE))
+        PANIC("unaligned paddr %x", paddr);
+
+    uint32_t vpn1 = (vaddr >> 22) & 0x3ff;
+    if ((table1[vpn1] & PAGE_V) == 0) {
+        // 创建不存在的二级页表 1KB
+        uint32_t pt_paddr = alloc_pages(1);
+        // 物理地址页号索引
+        table1[vpn1] = ((pt_paddr / PAGE_SIZE) << 10) | PAGE_V;
+    }
+
+    // 设置二级页表项以映射物理页面
+    uint32_t vpn0 = (vaddr >> 12) & 0x3ff;
+    uint32_t *table0 = (uint32_t *) ((table1[vpn1] >> 10) * PAGE_SIZE);
+    table0[vpn0] = ((paddr / PAGE_SIZE) << 10) | flags | PAGE_V;
+}
+```
+
+QEMU提供`info mem`命令以人类可读的格式显示当前页表映射，属性由 r（可读）、w（可写）、x（可执行）、a（已访问）和 d（已写入）的组合表示，其中 a 和 d 表示 CPU 已经“访问过该页面”和“写入过该页面”。

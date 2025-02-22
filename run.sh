@@ -14,3 +14,7 @@ $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf kernel.c common.c
 
 # 启动QEMU
 $QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot -kernel kernel.elf
+
+# # 启动QEMU并添加日志输出
+# $QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
+# -d unimp,guest_errors,int,cpu_reset -D qemu.log -kernel kernel.elf

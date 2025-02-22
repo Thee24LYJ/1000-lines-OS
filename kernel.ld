@@ -2,6 +2,7 @@ ENTRY(boot)
 
 SECTIONS{
 	. = 0x80200000;
+	__kernel_base = .;	/* 内核起始地址 */
 
 	.text :{
 		KEEP(*(.text.boot));
