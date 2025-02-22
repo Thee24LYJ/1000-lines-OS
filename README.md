@@ -354,3 +354,31 @@ void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags) {
 ```
 
 QEMU提供`info mem`命令以人类可读的格式显示当前页表映射，属性由 r（可读）、w（可写）、x（可执行）、a（已访问）和 d（已写入）的组合表示，其中 a 和 d 表示 CPU 已经“访问过该页面”和“写入过该页面”。
+
+# 应用程序及用户模式
+
+### 内存布局
+
+类似于内核的链接器脚本`kernel.ld`，这里创建应用程序的链接器脚本`user.ld`，用来定义应用程序在内存中的位置
+
+### 用户模式
+
+运行应用程序，我们使用一个称为用户模式的 CPU 模式，在 RISC-V 中称为 U-Mode
+
+```c
+// ↓ __attribute__((naked)) 非常重要!
+__attribute__((naked)) void user_entry(void) {
+    __asm__ __volatile__(
+        "csrw sepc, %[sepc]        \n"
+        "csrw sstatus, %[sstatus]  \n"
+        "sret                      \n"
+        :
+        : [sepc] "r" (USER_BASE),
+          [sstatus] "r" (SSTATUS_SPIE)
+    );
+}
+```
+从 S-Mode 到 U-Mode 的切换是通过 sret 指令完成的。然而，在改变操作模式之前，它对 CSR 进行了两次写入：
++ 在 sepc 寄存器中设置转换到 U-Mode 时的程序计数器。也就是 sret 跳转的地方。
++ 在 sstatus 寄存器中设置 SPIE 位。设置这个位在进入 U-Mode 时启用硬件中断，并且会调用在 stvec 寄存器中设置的处理程序
+

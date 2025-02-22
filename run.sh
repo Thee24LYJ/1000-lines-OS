@@ -9,8 +9,14 @@ QEMU=qemu-system-riscv32
 CC=clang
 CFLAGS="-std=c11 -O2 -g3 -Wall -Wextra --target=riscv32-unknown-elf -fno-stack-protector -ffreestanding  -nostdlib"
 
+# 编译应用程序 shell
+OBJCOPY=/usr/bin/llvm-objcopy
+$CC $CFLAGS -Wl,-Tuser.ld -Wl,-Map=shell.map -o shell.elf shell.c user.c common.c
+$OBJCOPY --set-section-flags .bss=alloc,contents -O binary shell.elf shell.bin
+$OBJCOPY -Ibinary -Oelf32-littleriscv shell.bin shell.bin.o
+
 # 编译内核
-$CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf kernel.c common.c
+$CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf kernel.c common.c shell.bin.o
 
 # 启动QEMU
 $QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot -kernel kernel.elf

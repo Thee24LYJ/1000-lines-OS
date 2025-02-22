@@ -5,6 +5,7 @@
 extern char __bss[], __bss_end[], __stack_top[];
 extern char __free_ram[], __free_ram_end[];
 extern char __kernel_base[];
+extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
 
 struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long fid, long eid)
 {
@@ -212,10 +213,21 @@ void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags)
 	table0[vpn0] = ((paddr / PAGE_SIZE) << 10) | flags | PAGE_V;
 }
 
+__attribute__((naked)) void user_entry(void)
+{
+	__asm__ __volatile__(
+		"csrw sepc, %[sepc]\n"		 // 设置sret跳转地址
+		"csrw sstatus, %[sstatus]\n" // 在sstatus寄存器中设置SPIE位
+		"sret\n"
+		:
+		: [sepc] "r"(USER_BASE),
+		  [sstatus] "r"(SSTATUS_SPIE));
+}
+
 // 所有进程
 struct process procs[PROCS_MAX];
 
-struct process *create_process(uint32_t pc)
+struct process *create_process(const void *image, size_t image_size)
 {
 	// 查找未使用的进程
 	struct process *proc = NULL;
@@ -235,25 +247,40 @@ struct process *create_process(uint32_t pc)
 
 	// 设置被调用者保存寄存器，这些寄存器将在switch_context第一次上下文切换时恢复
 	uint32_t *sp = (uint32_t *)&proc->stack[sizeof(proc->stack)];
-	*--sp = 0;			  // s11
-	*--sp = 0;			  // s10
-	*--sp = 0;			  // s9
-	*--sp = 0;			  // s8
-	*--sp = 0;			  // s7
-	*--sp = 0;			  // s6
-	*--sp = 0;			  // s5
-	*--sp = 0;			  // s4
-	*--sp = 0;			  // s3
-	*--sp = 0;			  // s2
-	*--sp = 0;			  // s1
-	*--sp = 0;			  // s0
-	*--sp = (uint32_t)pc; // ra
+	*--sp = 0;					  // s11
+	*--sp = 0;					  // s10
+	*--sp = 0;					  // s9
+	*--sp = 0;					  // s8
+	*--sp = 0;					  // s7
+	*--sp = 0;					  // s6
+	*--sp = 0;					  // s5
+	*--sp = 0;					  // s4
+	*--sp = 0;					  // s3
+	*--sp = 0;					  // s2
+	*--sp = 0;					  // s1
+	*--sp = 0;					  // s0
+	*--sp = (uint32_t)user_entry; // ra
 
 	// 映射内核页面
+	// 确保内核始终可以访问静态分配区域和由alloc_pages管理的动态分配区域
 	uint32_t *page_table = (uint32_t *)alloc_pages(1);
 	for (paddr_t paddr = (paddr_t)__kernel_base; paddr < (paddr_t)__free_ram_end; paddr += PAGE_SIZE)
 	{
 		map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
+	}
+
+	// 映射用户页面
+	for (uint32_t off = 0; off < image_size; off += PAGE_SIZE)
+	{
+		paddr_t page = alloc_pages(1);
+
+		// 复制的数据小于页面大小的情况
+		size_t remaining = image_size - off;
+		size_t copy_size = (PAGE_SIZE <= remaining ? PAGE_SIZE : remaining);
+
+		// 填充并映射页面
+		memcpy((void *)page, image + off, copy_size); // 逐页复制进程数据
+		map_page(page_table, USER_BASE + off, page, PAGE_U | PAGE_R | PAGE_W | PAGE_X);
 	}
 
 	// 初始化进程相关字段
@@ -358,7 +385,7 @@ void kernel_main(void)
 	// );
 
 	// 初始化空闲进程 ID=-1
-	idle_proc = create_process((uint32_t)NULL);
+	idle_proc = create_process(NULL, 0);
 	idle_proc->pid = -1;
 	cur_proc = idle_proc;
 
@@ -369,10 +396,11 @@ void kernel_main(void)
 	printf("call alloc_pages: paddr1=%x\n", paddr1);
 	// PANIC("kernel booted!!!\n");
 
-	// 调度器进程切换测试
-	proc_a = create_process((uint32_t)proc_a_entry);
-	proc_b = create_process((uint32_t)proc_b_entry);
+	// // 调度器进程切换测试
+	// proc_a = create_process((uint32_t)proc_a_entry);
+	// proc_b = create_process((uint32_t)proc_b_entry);
 
+	create_process(_binary_shell_bin_start, (size_t)_binary_shell_bin_size);
 	yield();
 	PANIC("switched to idle process");
 
