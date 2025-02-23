@@ -7,6 +7,11 @@ extern char __free_ram[], __free_ram_end[];
 extern char __kernel_base[];
 extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
 
+struct process *cur_proc;		 // 当前运行进程
+struct process *idle_proc;		 // 空闲进程
+struct process procs[PROCS_MAX]; // 所有进程
+
+// 实现OpenSBI调用
 struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long fid, long eid)
 {
 	register long a0 __asm__("a0") = arg0;
@@ -25,9 +30,18 @@ struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4, lo
 						 : "memory");
 	return (struct sbiret){.error = a0, .value = a1};
 }
+
+// 字符输出
 void putchar(char ch)
 {
 	sbi_call(ch, 0, 0, 0, 0, 0, 0, 1 /*终端打印*/);
+}
+
+// 从键盘接收字符
+long getchar(void)
+{
+	struct sbiret ret = sbi_call(0, 0, 0, 0, 0, 0, 0, 2);
+	return ret.error;
 }
 
 // 异常处理程序入口点
@@ -115,36 +129,7 @@ kernel_entry(void)
 		"sret\n");
 }
 
-// 读取异常发生原因并触发内核恐慌
-void handle_trap(struct trap_frame *f)
-{
-	uint32_t scause = READ_CSR(scause);
-	uint32_t stval = READ_CSR(stval);
-	uint32_t user_pc = READ_CSR(sepc);
-
-	PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
-}
-
-// 动态分配n页内存并返回对应的起始地址 待完善
-// 凹凸分配器或线性分配器 (未释放分配的内存)
-paddr_t alloc_pages(uint32_t n)
-{
-	static paddr_t next_paddr = (paddr_t)__free_ram;
-	paddr_t paddr = next_paddr;
-	next_paddr += n * PAGE_SIZE;
-
-	if (next_paddr > (paddr_t)__free_ram_end)
-	{
-		PANIC("out of memory!!!\n");
-	}
-	memset((void *)paddr, 0, n * PAGE_SIZE);
-	return paddr;
-}
-
-#define PROCS_MAX 8		// 最大进程数
-#define PROC_UNUSED 0	// 未运行的进程
-#define PROC_RUNNABLE 1 // 可运行的进程
-
+// 上下文切换
 __attribute__((naked)) void switch_context(uint32_t *prev_sp, uint32_t *next_sp)
 {
 	__asm__ __volatile__(
@@ -187,6 +172,117 @@ __attribute__((naked)) void switch_context(uint32_t *prev_sp, uint32_t *next_sp)
 		"ret\n");
 }
 
+// CPU调度
+void yield(void)
+{
+	// 寻找可以运行的进程
+	struct process *next = idle_proc;
+	for (int i = 0; i < PROCS_MAX; i++)
+	{
+		struct process *proc = &procs[(cur_proc->pid + i) % PROCS_MAX];
+		if (proc->state == PROC_RUNNABLE && proc->pid > 0)
+		{
+			next = proc;
+			break;
+		}
+	}
+
+	// 除当前进程外没有其他可运行进程则返回继续运行当前进程
+	if (next == cur_proc)
+	{
+		return;
+	}
+
+	// 在sscratch寄存器中设置当前执行进程的内核栈的初始值
+	// 上下文切换时切换进程页表
+	__asm__ __volatile__(
+		"sfence.vma\n"
+		"csrw satp, %[stap]\n"
+		"sfence.vma\n"
+		"csrw sscratch, %[sscratch]\n"
+		:
+		: [stap] "r"(SATP_SV32 | ((uint32_t)next->page_table / PAGE_SIZE)),
+		  [sscratch] "r"((uint32_t)&next->stack[sizeof(next->stack)]));
+
+	// 上下文切换
+	struct process *prev = cur_proc;
+	cur_proc = next;
+	switch_context(&prev->sp, &next->sp);
+}
+
+/**
+ * @brief 系统调用处理程序
+ *
+ * @param f 异常时寄存器结构体
+ */
+void handle_syscall(struct trap_frame *f)
+{
+	switch (f->a3)
+	{
+	case SYS_GETCHAR:
+		// 重复调用SBI直到输入一个字符
+		while (1)
+		{
+			long ch = getchar();
+			if (ch >= 0)
+			{
+				f->a0 = ch;
+				break;
+			}
+			// 切换到其他进程
+			yield();
+		}
+		break;
+	case SYS_PUTCHAR:
+		putchar(f->a0);
+		break;
+	case SYS_EXIT:
+		printf("process %d exited\n", cur_proc->pid);
+		// 简单起见只标记进程为退出，并未释放进程持有的资源
+		cur_proc->state = PROC_EXITED;
+		yield();
+		PANIC("unreachable");
+
+	default:
+		PANIC("unexpected syscall a3=%x\n", f->a3);
+	}
+}
+
+// 读取异常发生原因并触发内核恐慌
+void handle_trap(struct trap_frame *f)
+{
+	uint32_t scause = READ_CSR(scause);
+	uint32_t stval = READ_CSR(stval);
+	uint32_t user_pc = READ_CSR(sepc);
+
+	if (scause == SCAUSE_ECALL)
+	{
+		handle_syscall(f);
+		user_pc += 4;
+	}
+	else
+	{
+		PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
+	}
+	WRITE_CSR(sepc, user_pc);
+}
+
+// 动态分配n页内存并返回对应的起始地址 待完善
+// 凹凸分配器或线性分配器 (未释放分配的内存)
+paddr_t alloc_pages(uint32_t n)
+{
+	static paddr_t next_paddr = (paddr_t)__free_ram;
+	paddr_t paddr = next_paddr;
+	next_paddr += n * PAGE_SIZE;
+
+	if (next_paddr > (paddr_t)__free_ram_end)
+	{
+		PANIC("out of memory!!!\n");
+	}
+	memset((void *)paddr, 0, n * PAGE_SIZE);
+	return paddr;
+}
+
 // 准备二级页表并填充二级中的页表项
 void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags)
 {
@@ -223,9 +319,6 @@ __attribute__((naked)) void user_entry(void)
 		: [sepc] "r"(USER_BASE),
 		  [sstatus] "r"(SSTATUS_SPIE));
 }
-
-// 所有进程
-struct process procs[PROCS_MAX];
 
 struct process *create_process(const void *image, size_t image_size)
 {
@@ -289,46 +382,6 @@ struct process *create_process(const void *image, size_t image_size)
 	proc->sp = (uint32_t)sp;
 	proc->page_table = page_table;
 	return proc;
-}
-
-struct process *cur_proc;  // 当前运行进程
-struct process *idle_proc; // 空闲进程
-
-void yield(void)
-{
-	// 寻找可以运行的进程
-	struct process *next = idle_proc;
-	for (int i = 0; i < PROCS_MAX; i++)
-	{
-		struct process *proc = &procs[(cur_proc->pid + i) % PROCS_MAX];
-		if (proc->state == PROC_RUNNABLE && proc->pid > 0)
-		{
-			next = proc;
-			break;
-		}
-	}
-
-	// 除当前进程外没有其他可运行进程则返回继续运行当前进程
-	if (next == cur_proc)
-	{
-		return;
-	}
-
-	// 在sscratch寄存器中设置当前执行进程的内核栈的初始值
-	// 上下文切换时切换进程页表
-	__asm__ __volatile__(
-		"sfence.vma\n"
-		"csrw satp, %[stap]\n"
-		"sfence.vma\n"
-		"csrw sscratch, %[sscratch]\n"
-		:
-		: [stap] "r"(SATP_SV32 | ((uint32_t)next->page_table / PAGE_SIZE)),
-		  [sscratch] "r"((uint32_t)&next->stack[sizeof(next->stack)]));
-
-	// 上下文切换
-	struct process *prev = cur_proc;
-	cur_proc = next;
-	switch_context(&prev->sp, &next->sp);
 }
 
 // 上下文切换测试

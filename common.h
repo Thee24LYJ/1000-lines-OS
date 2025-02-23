@@ -33,4 +33,9 @@ void printf(const char *fmt, ...);
 // 一页大小为4KB
 #define PAGE_SIZE 4096
 
+// 系统调用号
+#define SYS_PUTCHAR 1
+#define SYS_GETCHAR 2
+#define SYS_EXIT 3
+
 #endif

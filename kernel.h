@@ -82,6 +82,11 @@ struct process
 		__asm__ __volatile__("csrw " #reg ", %0" : : "r"(__tmp)); \
 	} while (0);
 
+#define PROCS_MAX 8		// 最大进程数
+#define PROC_UNUSED 0	// 未运行的进程
+#define PROC_RUNNABLE 1 // 可运行的进程
+#define PROC_EXITED 2
+
 #define SATP_SV32 (1u << 31)
 #define PAGE_V (1 << 0) // 有效位(表项已启用)
 #define PAGE_R (1 << 1) // 可读
@@ -94,5 +99,7 @@ struct process
 
 // sstatus寄存器SPIE位
 #define SSTATUS_SPIE (1 << 5)
+// ecall指令
+#define SCAUSE_ECALL 8
 
 #endif

@@ -382,3 +382,53 @@ __attribute__((naked)) void user_entry(void) {
 + 在 sepc 寄存器中设置转换到 U-Mode 时的程序计数器。也就是 sret 跳转的地方。
 + 在 sstatus 寄存器中设置 SPIE 位。设置这个位在进入 U-Mode 时启用硬件中断，并且会调用在 stvec 寄存器中设置的处理程序
 
+# 系统调用
+
+通过系统调用允许应用程序调用内核函数
+
+```
+int syscall(int sysno, int arg0, int arg1, int arg2) {
+    register int a0 __asm__("a0") = arg0;
+    register int a1 __asm__("a1") = arg1;
+    register int a2 __asm__("a2") = arg2;
+    register int a3 __asm__("a3") = sysno;
+
+    __asm__ __volatile__("ecall"
+                         : "=r"(a0)
+                         : "r"(a0), "r"(a1), "r"(a2), "r"(a3)
+                         : "memory");
+
+    return a0;
+}
+```
+syscall 函数在 a3 寄存器中设置系统调用号，在 a0 到 a2 寄存器中设置系统调用参数，然后执行 ecall 指令。ecall 指令是用于将处理委托给内核的特殊指令。当执行 ecall 指令时，会调用异常处理程序，控制权转移到内核。
+
+内核中处理系统调用的ecall指令：
+```c
+#define SCAUSE_ECALL 8
+
+void handle_syscall(struct trap_frame *f) {
+    switch (f->a3) {
+        case SYS_PUTCHAR:
+            putchar(f->a0);
+            break;
+        default:
+            PANIC("unexpected syscall a3=%x\n", f->a3);
+    }
+}
+
+void handle_trap(struct trap_frame *f) {
+    uint32_t scause = READ_CSR(scause);
+    uint32_t stval = READ_CSR(stval);
+    uint32_t user_pc = READ_CSR(sepc);
+    if (scause == SCAUSE_ECALL) {
+        handle_syscall(f);
+        user_pc += 4;
+    } else {
+        PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
+    }
+
+    WRITE_CSR(sepc, user_pc);
+}
+```
+是否调用了 ecall 指令可以通过检查 scause 的值来确定。除了调用 handle_syscall 函数外，我们还将 4（ecall 指令的大小）加到 sepc 的值上。这是因为 sepc 指向导致异常的程序计数器，它指向 ecall 指令。如果我们不改变它，内核会返回到同一个位置，并且 ecall 指令会被重复执行
