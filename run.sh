@@ -19,7 +19,10 @@ $OBJCOPY -Ibinary -Oelf32-littleriscv shell.bin shell.bin.o
 $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf kernel.c common.c shell.bin.o
 
 # 启动QEMU
-$QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot -kernel kernel.elf
+$QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
+    -drive id=drive0,file=lorem.txt,format=raw,if=none \
+    -device virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0 \
+    -kernel kernel.elf
 
 # # 启动QEMU并添加日志输出
 # $QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \

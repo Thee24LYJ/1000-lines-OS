@@ -15,7 +15,7 @@ typedef uint32_t vaddr_t; // 虚拟内存地址类型
 #define NULL ((void *)0)
 
 // 编译器内置功能
-#define align_up(value, algin) __builtin_align_up(value, align)
+#define align_up(value, align) __builtin_align_up(value, align)
 #define is_aligned(value, align) __builtin_is_aligned(value, align)
 #define offsetof(type, member) __builtin_offsetof(type, member)
 #define va_list __builtin_va_list
