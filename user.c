@@ -54,6 +54,31 @@ int getchar(void)
 {
     return syscall(SYS_GETCHAR, 0, 0, 0);
 }
+/**
+ * @brief 文件读取
+ *
+ * @param filename 待读取文件名
+ * @param buf 读取缓冲区
+ * @param len 长度
+ * @return int 内核返回值
+ */
+int readfile(const char *filename, char *buf, int len)
+{
+    return syscall(SYS_READFILE, (int)filename, (int)buf, len);
+}
+
+/**
+ * @brief 文件写入
+ *
+ * @param filename 待写入文件名
+ * @param buf 写入缓冲区
+ * @param len 长度
+ * @return int 内核返回值
+ */
+int writefile(const char *filename, const char *buf, int len)
+{
+    return syscall(SYS_WRITEFILE, (int)filename, (int)buf, len);
+}
 
 __attribute__((section(".text.start")))
 __attribute__((naked)) void
