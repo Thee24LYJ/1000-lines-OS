@@ -235,6 +235,12 @@ struct file *fs_lookup(const char *filename)
 	return NULL;
 }
 
+// 关机命令调用
+void shutdown(void)
+{
+	sbi_call(0, 0, 0, 0, 0, 0, 0, 8);
+}
+
 /**
  * @brief 系统调用处理程序
  *
@@ -298,6 +304,12 @@ void handle_syscall(struct trap_frame *f)
 		}
 
 		f->a0 = len;
+		break;
+	}
+	case SYS_SHUTDOWN:
+	{
+		printf("shutdown!!!\n");
+		shutdown();
 		break;
 	}
 

@@ -49,6 +49,10 @@ void main(void)
         {
             writefile("hello.txt", "hello from shell!\n", 19);
         }
+        else if (strcmp(cmdline, "shutdown") == 0)
+        {
+            shutdown();
+        }
         else
         {
             printf("unknown command: %s\n", cmdline);

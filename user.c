@@ -80,6 +80,16 @@ int writefile(const char *filename, const char *buf, int len)
     return syscall(SYS_WRITEFILE, (int)filename, (int)buf, len);
 }
 
+/**
+ * @brief 关机
+ *
+ * @return int 内核返回值
+ */
+int shutdown(void)
+{
+    return syscall(SYS_SHUTDOWN, 0, 0, 0);
+}
+
 __attribute__((section(".text.start")))
 __attribute__((naked)) void
 start(void)
